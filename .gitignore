@@ -1,0 +1,42 @@
+node_modules/
+dist/
+build/
+.next/
+.cache/
+.turbo/
+coverage/
+
+# pnpm
+.pnpm-store/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Drizzle
+lib/db/drizzle/.snapshot.json
+
+# Generated (kept tracked but easy to regenerate)
+# (Orval-generated files are tracked so codegen-free contributors can build.)
+
+# Python bridge state
+.tradj_bridge.json
+__pycache__/
+*.pyc
+.venv/
