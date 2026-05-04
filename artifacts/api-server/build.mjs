@@ -1,10 +1,30 @@
 import { mkdir, copyFile, readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { build } from "esbuild";
 
-const pkg = JSON.parse(await readFile("package.json", "utf8"));
-const external = Object.keys(pkg.dependencies ?? {}).filter(
-  (name) => !name.startsWith("@workspace/"),
-);
+const WORKSPACE_PREFIX = "@workspace/";
+const seen = new Set();
+const externalSet = new Set();
+
+async function collectDeps(pkgPath) {
+  if (seen.has(pkgPath)) return;
+  seen.add(pkgPath);
+  const pkg = JSON.parse(await readFile(pkgPath, "utf8"));
+  const deps = Object.keys(pkg.dependencies ?? {});
+  for (const name of deps) {
+    if (name.startsWith(WORKSPACE_PREFIX)) {
+      const rel = name.slice(WORKSPACE_PREFIX.length);
+      // resolve workspace package: ../../lib/<rel>/package.json
+      const wsPkg = resolve(dirname(pkgPath), "..", "..", "lib", rel, "package.json");
+      await collectDeps(wsPkg);
+    } else {
+      externalSet.add(name);
+    }
+  }
+}
+
+await collectDeps(resolve("package.json"));
+const external = Array.from(externalSet);
 
 await build({
   entryPoints: ["src/index.ts"],

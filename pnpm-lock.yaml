@@ -29,9 +29,15 @@ importers:
       drizzle-orm:
         specifier: 0.36.4
         version: 0.36.4(@types/pg@8.11.10)(@types/react@18.3.12)(pg@8.13.1)(postgres@3.4.5)(react@18.3.1)
+      drizzle-zod:
+        specifier: 0.5.1
+        version: 0.5.1(drizzle-orm@0.36.4(@types/pg@8.11.10)(@types/react@18.3.12)(pg@8.13.1)(postgres@3.4.5)(react@18.3.1))(zod@3.23.8)
       express:
         specifier: 5.0.1
         version: 5.0.1
+      pg:
+        specifier: 8.13.1
+        version: 8.13.1
       pino:
         specifier: 9.5.0
         version: 9.5.0
