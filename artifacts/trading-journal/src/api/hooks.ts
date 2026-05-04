@@ -4,7 +4,7 @@ import {
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
-import { apiFetch } from "./client";
+import { apiFetch, setStoredToken } from "./client";
 import type {
   AuthResponse,
   CalendarMonth,
@@ -49,7 +49,10 @@ export function useRegenerateToken(qc: QueryClient = useQueryClient()) {
   return useMutation({
     mutationFn: () =>
       apiFetch<AuthResponse>("/auth/regenerate-token", { method: "POST" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["auth", "me"] }),
+    onSuccess: (data) => {
+      setStoredToken(data.token);
+      qc.invalidateQueries({ queryKey: ["auth", "me"] });
+    },
   });
 }
 

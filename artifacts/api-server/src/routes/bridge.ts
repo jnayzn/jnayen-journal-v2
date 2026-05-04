@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, access } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Router } from "express";
@@ -7,13 +7,26 @@ import { requireAuth } from "../lib/auth";
 const router = Router();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SCRIPT_PATH = resolve(__dirname, "../bridge/tradj_bridge.py");
+const SCRIPT_CANDIDATES = [
+  resolve(__dirname, "../bridge/tradj_bridge.py"),
+  resolve(__dirname, "./bridge/tradj_bridge.py"),
+];
 
 let cached: string | null = null;
 async function readScript(): Promise<string> {
   if (cached) return cached;
-  cached = await readFile(SCRIPT_PATH, "utf8");
-  return cached;
+  for (const candidate of SCRIPT_CANDIDATES) {
+    try {
+      await access(candidate);
+      cached = await readFile(candidate, "utf8");
+      return cached;
+    } catch {
+      // try next candidate
+    }
+  }
+  throw new Error(
+    `tradj_bridge.py not found. Tried: ${SCRIPT_CANDIDATES.join(", ")}`,
+  );
 }
 
 router.get("/script", requireAuth, async (_req, res, next) => {
