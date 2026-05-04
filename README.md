@@ -1,0 +1,3 @@
+# Jnayen Trading Journal v2
+
+Initializing...
