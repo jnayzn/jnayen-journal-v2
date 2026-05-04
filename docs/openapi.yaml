@@ -1,0 +1,351 @@
+openapi: 3.1.0
+info:
+  title: Jnayen Trading Journal API
+  description: |
+    REST API for the Jnayen Trading Journal (no-AI variant).
+
+    Auth: send `Authorization: Bearer <token>` (or `Authorization: Token <token>`)
+    on every protected endpoint. The token is returned by `/auth/login` and
+    `/auth/register`, and is also visible on the Settings page in the web app.
+  version: 0.1.0
+servers:
+  - url: /api
+    description: Local mounted API
+tags:
+  - name: auth
+  - name: trades
+  - name: stats
+  - name: bridge
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      responses:
+        "200": { description: OK }
+
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Create a new account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Credentials" }
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResponse" }
+        "409": { description: Username already taken }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Sign in
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Credentials" }
+      responses:
+        "200":
+          description: Signed in
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResponse" }
+        "401": { description: Invalid credentials }
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Get the current user + token
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+                  token: { type: string }
+
+  /auth/regenerate-token:
+    post:
+      tags: [auth]
+      summary: Rotate the API token
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: New token
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResponse" }
+
+  /trades:
+    get:
+      tags: [trades]
+      summary: List trades
+      security: [{ bearer: [] }]
+      parameters:
+        - in: query
+          name: symbol
+          schema: { type: string }
+        - in: query
+          name: side
+          schema: { type: string, enum: [BUY, SELL] }
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: Paginated list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Trade" }
+                  limit: { type: integer }
+                  offset: { type: integer }
+    post:
+      tags: [trades]
+      summary: Create a single trade
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TradeInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  trade: { $ref: "#/components/schemas/Trade" }
+        "409": { description: Duplicate ticket }
+
+  /trades/import:
+    post:
+      tags: [trades]
+      summary: Bulk import trades (used by the MT5 bridge)
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: "#/components/schemas/TradeInput" }
+      responses:
+        "200":
+          description: Import result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  inserted: { type: integer }
+                  skipped: { type: integer }
+
+  /trades/{id}:
+    get:
+      tags: [trades]
+      summary: Get a single trade
+      security: [{ bearer: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Trade
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  trade: { $ref: "#/components/schemas/Trade" }
+        "404": { description: Not found }
+    delete:
+      tags: [trades]
+      summary: Delete a trade
+      security: [{ bearer: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: Deleted }
+
+  /stats/summary:
+    get:
+      tags: [stats]
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Summary stats
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatsSummary" }
+
+  /stats/equity:
+    get:
+      tags: [stats]
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Equity curve
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  points:
+                    type: array
+                    items: { $ref: "#/components/schemas/EquityPoint" }
+
+  /stats/by-symbol:
+    get:
+      tags: [stats]
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Per-symbol stats
+
+  /stats/calendar:
+    get:
+      tags: [stats]
+      security: [{ bearer: [] }]
+      parameters:
+        - in: query
+          name: year
+          required: true
+          schema: { type: integer }
+        - in: query
+          name: month
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 12 }
+      responses:
+        "200":
+          description: Calendar heatmap
+
+  /stats/insights:
+    get:
+      tags: [stats]
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Insights and trader score
+
+  /bridge/script:
+    get:
+      tags: [bridge]
+      summary: Download the MT5 bridge Python script
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: Python source
+          content:
+            text/x-python:
+              schema: { type: string }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: token
+  schemas:
+    Credentials:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 3, maxLength: 50 }
+        password: { type: string, minLength: 8, maxLength: 200 }
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        createdAt: { type: string, format: date-time }
+    AuthResponse:
+      type: object
+      properties:
+        token: { type: string }
+        user: { $ref: "#/components/schemas/User" }
+    TradeInput:
+      type: object
+      required:
+        [ticket, symbol, side, volume, openPrice, closePrice, openTime, closeTime, profit]
+      properties:
+        ticket: { type: string }
+        symbol: { type: string }
+        side: { type: string, enum: [BUY, SELL] }
+        volume: { type: number }
+        openPrice: { type: number }
+        closePrice: { type: number }
+        openTime: { type: string, format: date-time }
+        closeTime: { type: string, format: date-time }
+        profit: { type: number }
+        commission: { type: number, default: 0 }
+        swap: { type: number, default: 0 }
+        mae: { type: number, nullable: true }
+        mfe: { type: number, nullable: true }
+        magicNumber: { type: integer, nullable: true }
+        notes: { type: string, nullable: true }
+    Trade:
+      allOf:
+        - $ref: "#/components/schemas/TradeInput"
+        - type: object
+          properties:
+            id: { type: integer }
+            userId: { type: integer }
+            createdAt: { type: string, format: date-time }
+    StatsSummary:
+      type: object
+      properties:
+        totalTrades: { type: integer }
+        winningTrades: { type: integer }
+        losingTrades: { type: integer }
+        totalPnl: { type: number }
+        grossProfit: { type: number }
+        grossLoss: { type: number }
+        winRate: { type: number }
+        profitFactor: { type: number }
+        expectancy: { type: number }
+        averageWin: { type: number }
+        averageLoss: { type: number }
+        riskReward: { type: number }
+        maxDrawdownPct: { type: number }
+        bestTrade: { type: number }
+        worstTrade: { type: number }
+    EquityPoint:
+      type: object
+      properties:
+        index: { type: integer }
+        ticket: { type: string }
+        symbol: { type: string }
+        closeTime: { type: string, format: date-time }
+        profit: { type: number }
+        equity: { type: number }
+        drawdownPct: { type: number }
