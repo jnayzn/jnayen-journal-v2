@@ -65,8 +65,6 @@ int            maHandle   = INVALID_HANDLE;
 datetime       lastBarTime = 0;
 string         dashPrefix = "QAISMC_DASH_";
 string         signalPrefix = "QAISMC_SIG_";
-int            digits;
-double         pointSize;
 
 // Retry queue for journal pushes that failed (e.g. transient network issues)
 ulong          gPendingTickets[];
@@ -143,9 +141,6 @@ int OnInit()
       Print("[QAISMC] Invalid analysis periods");
       return(INIT_PARAMETERS_INCORRECT);
    }
-
-   digits    = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-   pointSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
 
    atrHandle = iATR(_Symbol, _Period, InpATRPeriod);
    maHandle  = iMA(_Symbol, _Period, InpMAPeriod, 0, MODE_SMA, PRICE_CLOSE);
@@ -618,10 +613,10 @@ bool TryExecuteBuy(double atr, int aiScore, const ScoreBreakdown &b)
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    if(ask <= 0.0 || bid <= 0.0 || atr <= 0.0) return false;
 
-   double sl = NormalizeDouble(bid - atr * InpATRMultiplier, digits);
+   double sl = NormalizeDouble(bid - atr * InpATRMultiplier, _Digits);
    if(sl >= ask) return false;
    double slDistance = ask - sl;
-   double tp = NormalizeDouble(ask + slDistance * InpRR, digits);
+   double tp = NormalizeDouble(ask + slDistance * InpRR, _Digits);
 
    double lot = CalculateLot(slDistance);
    if(lot <= 0.0)
@@ -631,7 +626,7 @@ bool TryExecuteBuy(double atr, int aiScore, const ScoreBreakdown &b)
    }
 
    long stopLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
-   double minDist = stopLevel * pointSize;
+   double minDist = stopLevel * _Point;
    if((ask - sl) < minDist || (tp - ask) < minDist)
    {
       Print("[QAISMC] SL/TP closer than stop level (", stopLevel, " pts), skip");
@@ -650,9 +645,9 @@ bool TryExecuteBuy(double atr, int aiScore, const ScoreBreakdown &b)
    if(InpDrawSignals)
       DrawSignal(ask, sl, tp, (datetime)TimeCurrent());
 
-   Print("[QAISMC] BUY ", lot, " @", DoubleToString(ask, digits),
-         " SL=", DoubleToString(sl, digits),
-         " TP=", DoubleToString(tp, digits),
+   Print("[QAISMC] BUY ", lot, " @", DoubleToString(ask, _Digits),
+         " SL=", DoubleToString(sl, _Digits),
+         " TP=", DoubleToString(tp, _Digits),
          " AIScore=", aiScore,
          " ProbBuy=", DoubleToString(b.probBuy, 1), "%");
    return true;
@@ -719,7 +714,7 @@ void CreateDashboardSkeleton()
    }
 }
 
-void SetDashLine(int row, const string &text, color clr)
+void SetDashLine(int row, string text, color clr)
 {
    string name = dashPrefix + "L" + IntegerToString(row);
    if(ObjectFind(0, name) < 0)
@@ -760,17 +755,17 @@ void UpdateDashboard(int aiScore,
    SetDashLine(row++, StringFormat("AI Score: %d / 17", aiScore), InpDashFg);
    SetDashLine(row++, StringFormat("ProbBUY : %5.1f %%", b.probBuy),  clrLimeGreen);
    SetDashLine(row++, StringFormat("ProbSELL: %5.1f %%", b.probSell), clrTomato);
-   SetDashLine(row++, StringFormat("Momentum: %.*f", digits, momentum),
+   SetDashLine(row++, StringFormat("Momentum: %.*f", _Digits, momentum),
                                                           (momentum >= 0 ? clrLimeGreen : clrTomato));
    SetDashLine(row++, StringFormat("Z-Score : %.2f", zScore),
                                                           (MathAbs(zScore) >= InpZScoreExtreme ? clrGold : InpDashFg));
-   SetDashLine(row++, StringFormat("ATR(%d) : %.*f", InpATRPeriod, digits, atr), InpDashFg);
+   SetDashLine(row++, StringFormat("ATR(%d) : %.*f", InpATRPeriod, _Digits, atr), InpDashFg);
 
    if(fib.valid)
    {
-      SetDashLine(row++, StringFormat("Fib61.8 : %.*f", digits, fib.fib618), InpDashFg);
-      SetDashLine(row++, StringFormat("Fib70.5 : %.*f", digits, fib.fib705), InpDashFg);
-      SetDashLine(row++, StringFormat("Fib78.6 : %.*f", digits, fib.fib786), InpDashFg);
+      SetDashLine(row++, StringFormat("Fib61.8 : %.*f", _Digits, fib.fib618), InpDashFg);
+      SetDashLine(row++, StringFormat("Fib70.5 : %.*f", _Digits, fib.fib705), InpDashFg);
+      SetDashLine(row++, StringFormat("Fib78.6 : %.*f", _Digits, fib.fib786), InpDashFg);
    }
    else
    {
@@ -780,11 +775,11 @@ void UpdateDashboard(int aiScore,
    }
 
    //--- Hypothetical entry plan (BUY)
-   double slPlan = NormalizeDouble(bid - atr * InpATRMultiplier, digits);
-   double tpPlan = NormalizeDouble(bid + (bid - slPlan) * InpRR, digits);
-   SetDashLine(row++, StringFormat("Entry   : %.*f", digits, bid),    InpEntryColor);
-   SetDashLine(row++, StringFormat("StopLoss: %.*f", digits, slPlan), InpSlColor);
-   SetDashLine(row++, StringFormat("TakePft : %.*f", digits, tpPlan), InpTpColor);
+   double slPlan = NormalizeDouble(bid - atr * InpATRMultiplier, _Digits);
+   double tpPlan = NormalizeDouble(bid + (bid - slPlan) * InpRR, _Digits);
+   SetDashLine(row++, StringFormat("Entry   : %.*f", _Digits, bid),    InpEntryColor);
+   SetDashLine(row++, StringFormat("StopLoss: %.*f", _Digits, slPlan), InpSlColor);
+   SetDashLine(row++, StringFormat("TakePft : %.*f", _Digits, tpPlan), InpTpColor);
 
    SetDashLine(row++, "BOS     : "       + YesNo(b.bosBull)     + " / " + YesNo(b.bosBear),     Flag(b.bosBull || b.bosBear));
    SetDashLine(row++, "CHOCH   : "       + YesNo(b.chochBull)   + " / " + YesNo(b.chochBear),   Flag(b.chochBull || b.chochBear));
@@ -905,8 +900,8 @@ bool PushClosedPositionToJournal(ulong positionId)
    body += "\"symbol\":\""     + JsonEscape(symbol) + "\",";
    body += "\"side\":\""       + side + "\",";
    body += "\"volume\":"        + DoubleToString(entryVolumeSum, 2) + ",";
-   body += "\"openPrice\":"     + DoubleToString(openPrice, digits) + ",";
-   body += "\"closePrice\":"    + DoubleToString(closePrice, digits)+ ",";
+   body += "\"openPrice\":"     + DoubleToString(openPrice, _Digits) + ",";
+   body += "\"closePrice\":"    + DoubleToString(closePrice, _Digits)+ ",";
    body += "\"openTime\":\""    + BrokerEpochToIsoUtc(openT)  + "\",";
    body += "\"closeTime\":\""   + BrokerEpochToIsoUtc(closeT) + "\",";
    body += "\"profit\":"        + DoubleToString(profit, 2)     + ",";
@@ -922,7 +917,7 @@ bool PushClosedPositionToJournal(ulong positionId)
 //---- Returns true if the trade was accepted (201) or already known (409),
 //     so the caller should NOT retry. Returns false only for transient
 //     network failures (WebRequest -1) that warrant a retry.
-bool SendTradeToJournal(const string &body, ulong positionId)
+bool SendTradeToJournal(string body, ulong positionId)
 {
    string url = InpApiUrl;
    if(StringLen(url) == 0) return true; // misconfigured — don't loop
