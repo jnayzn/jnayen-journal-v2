@@ -68,6 +68,12 @@ string         signalPrefix = "QAISMC_SIG_";
 int            digits;
 double         pointSize;
 
+// Retry queue for journal pushes that failed (e.g. transient network issues)
+ulong          gPendingTickets[];
+datetime       gLastRetryAt   = 0;
+const int      kMaxRetryQueue = 50;
+const int      kRetryEverySec = 30;
+
 //------------------------------------------------------------------+
 //  SUPPORT STRUCTS
 //------------------------------------------------------------------+
@@ -185,6 +191,14 @@ void OnTick()
    bool isNewBar = (curBarTime != lastBarTime);
    if(isNewBar) lastBarTime = curBarTime;
 
+   // Retry any journal pushes that previously failed with a network error.
+   if(InpPushToJournal && ArraySize(gPendingTickets) > 0 &&
+      (TimeCurrent() - gLastRetryAt) >= kRetryEverySec)
+   {
+      RetryPendingPushes();
+      gLastRetryAt = TimeCurrent();
+   }
+
    // Heavy analysis only on new bar; entry attempt always (uses cached state)
    static bool           firstRun = true;
    static int            cachedScore = 0;
@@ -243,7 +257,14 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
    ulong positionId = (ulong)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
    if(positionId == 0) return;
 
-   PushClosedPositionToJournal(positionId);
+   // Gate push on FULL closure. A partial close also fires DEAL_ENTRY_OUT but
+   // leaves the position open with reduced volume — pushing here would lock
+   // in partial PnL/closeTime since later attempts would 409 on the journal's
+   // UNIQUE(user_id,ticket).
+   if(IsPositionStillOpen(positionId)) return;
+
+   if(!PushClosedPositionToJournal(positionId))
+      EnqueuePendingPush(positionId);
 }
 
 //==================================================================
@@ -813,23 +834,28 @@ string JsonEscape(string s)
    return r;
 }
 
-void PushClosedPositionToJournal(ulong positionId)
+//---- Returns true on definitive success or duplicate (do not retry).
+//     Returns false only on transient errors (queue for retry).
+bool PushClosedPositionToJournal(ulong positionId)
 {
-   if(!HistorySelectByPosition(positionId)) return;
+   if(!HistorySelectByPosition(positionId)) return true; // nothing to push
    int dealsTotal = HistoryDealsTotal();
-   if(dealsTotal < 2) return; // need at least entry + exit
+   if(dealsTotal < 2) return true;
 
-   datetime openT = 0, closeT = 0;
-   double openPrice = 0.0, closePrice = 0.0;
-   double volume = 0.0;
+   //--- Aggregates across ALL entry and exit fills (handles split fills /
+   //    scale-ins / partial closes correctly).
+   double entryVolumeSum   = 0.0;
+   double entryPxVolumeSum = 0.0; // sum(price_i * volume_i) for weighted avg
+   double exitVolumeSum    = 0.0;
+   double exitPxVolumeSum  = 0.0;
+   double profit     = 0.0;
+   double commission = 0.0;
+   double swap       = 0.0;
+   datetime openT  = 0;
+   datetime closeT = 0;
    string symbol = "";
-   string side = "";
-   double profit = 0.0, commission = 0.0, swap = 0.0;
-   long magic = 0;
-   double entrySign = 0.0;
-
-   ulong entryTicket = 0, exitTicket = 0;
-   datetime firstTime = 0, lastTime = 0;
+   string side   = "";
+   string entryComment = "";
 
    for(int i = 0; i < dealsTotal; ++i)
    {
@@ -848,53 +874,58 @@ void PushClosedPositionToJournal(ulong positionId)
 
       if(entry == DEAL_ENTRY_IN)
       {
-         entryTicket = dt;
-         openT       = dtime;
-         openPrice   = dprice;
-         volume      = dvol;
-         symbol      = dsym;
-         magic       = HistoryDealGetInteger(dt, DEAL_MAGIC);
-         side        = (dtype == DEAL_TYPE_BUY) ? "BUY" : "SELL";
-         firstTime   = dtime;
+         entryVolumeSum   += dvol;
+         entryPxVolumeSum += dprice * dvol;
+         if(openT == 0 || dtime < openT) openT = dtime;
+         if(symbol == "")
+         {
+            symbol       = dsym;
+            side         = (dtype == DEAL_TYPE_BUY) ? "BUY" : "SELL";
+            entryComment = HistoryDealGetString(dt, DEAL_COMMENT);
+         }
       }
       else if(entry == DEAL_ENTRY_OUT || entry == DEAL_ENTRY_OUT_BY)
       {
-         exitTicket = dt;
-         closeT     = dtime;
-         closePrice = dprice;
-         lastTime   = dtime;
+         exitVolumeSum   += dvol;
+         exitPxVolumeSum += dprice * dvol;
+         if(dtime > closeT) closeT = dtime;
       }
    }
 
-   if(entryTicket == 0 || exitTicket == 0) return;
-   if(symbol == "" || side == "") return;
+   if(entryVolumeSum <= 0.0 || exitVolumeSum <= 0.0) return true;
+   if(symbol == "" || side == "") return true;
 
-   string notes = HistoryDealGetString(entryTicket, DEAL_COMMENT);
-   notes = (StringLen(notes) > 0) ? notes : "QAISMC";
+   double openPrice  = entryPxVolumeSum / entryVolumeSum;
+   double closePrice = exitPxVolumeSum  / exitVolumeSum;
+
+   string notes = (StringLen(entryComment) > 0) ? entryComment : "QAISMC";
 
    string body = "{";
-   body += "\"ticket\":\"" + IntegerToString((long)positionId) + "\",";
-   body += "\"symbol\":\""  + JsonEscape(symbol) + "\",";
-   body += "\"side\":\""    + side + "\",";
-   body += "\"volume\":"     + DoubleToString(volume, 2)        + ",";
-   body += "\"openPrice\":"  + DoubleToString(openPrice, digits) + ",";
-   body += "\"closePrice\":" + DoubleToString(closePrice, digits)+ ",";
-   body += "\"openTime\":\""  + BrokerEpochToIsoUtc(openT)  + "\",";
-   body += "\"closeTime\":\"" + BrokerEpochToIsoUtc(closeT) + "\",";
-   body += "\"profit\":"      + DoubleToString(profit, 2)     + ",";
-   body += "\"commission\":"  + DoubleToString(commission, 2) + ",";
-   body += "\"swap\":"        + DoubleToString(swap, 2)       + ",";
-   body += "\"magicNumber\":" + IntegerToString(InpMagicNumber)+ ",";
-   body += "\"notes\":\""     + JsonEscape(notes)             + "\"";
+   body += "\"ticket\":\""     + IntegerToString((long)positionId) + "\",";
+   body += "\"symbol\":\""     + JsonEscape(symbol) + "\",";
+   body += "\"side\":\""       + side + "\",";
+   body += "\"volume\":"        + DoubleToString(entryVolumeSum, 2) + ",";
+   body += "\"openPrice\":"     + DoubleToString(openPrice, digits) + ",";
+   body += "\"closePrice\":"    + DoubleToString(closePrice, digits)+ ",";
+   body += "\"openTime\":\""    + BrokerEpochToIsoUtc(openT)  + "\",";
+   body += "\"closeTime\":\""   + BrokerEpochToIsoUtc(closeT) + "\",";
+   body += "\"profit\":"        + DoubleToString(profit, 2)     + ",";
+   body += "\"commission\":"    + DoubleToString(commission, 2) + ",";
+   body += "\"swap\":"          + DoubleToString(swap, 2)       + ",";
+   body += "\"magicNumber\":"   + IntegerToString(InpMagicNumber)+ ",";
+   body += "\"notes\":\""       + JsonEscape(notes)             + "\"";
    body += "}";
 
-   SendTradeToJournal(body, positionId);
+   return SendTradeToJournal(body, positionId);
 }
 
-void SendTradeToJournal(const string &body, ulong positionId)
+//---- Returns true if the trade was accepted (201) or already known (409),
+//     so the caller should NOT retry. Returns false only for transient
+//     network failures (WebRequest -1) that warrant a retry.
+bool SendTradeToJournal(const string &body, ulong positionId)
 {
    string url = InpApiUrl;
-   if(StringLen(url) == 0) return;
+   if(StringLen(url) == 0) return true; // misconfigured — don't loop
    if(StringSubstr(url, StringLen(url) - 1, 1) == "/")
       url = StringSubstr(url, 0, StringLen(url) - 1);
    url += "/trades";
@@ -917,18 +948,78 @@ void SendTradeToJournal(const string &body, ulong positionId)
    {
       int err = GetLastError();
       Print("[QAISMC] WebRequest failed err=", err,
+            " ticket=", positionId,
             " (add ", InpApiUrl,
             " to Tools > Options > Expert Advisors > Allow WebRequest)");
-      return;
+      return false; // transient — caller should retry
    }
 
    string resp = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
    if(code == 201)
+   {
       Print("[QAISMC] Journal: pushed ticket=", positionId);
-   else if(code == 409)
+      return true;
+   }
+   if(code == 409)
+   {
       Print("[QAISMC] Journal: duplicate ticket=", positionId, " (ok)");
-   else
-      Print("[QAISMC] Journal HTTP ", code, " body=", resp);
+      return true;
+   }
+   // 4xx (other) / 5xx: server rejected. Retrying with same body won't help.
+   Print("[QAISMC] Journal HTTP ", code, " ticket=", positionId,
+         " body=", resp);
+   return true;
+}
+
+//==================================================================
+//  POSITION STATE + RETRY QUEUE HELPERS
+//==================================================================
+bool IsPositionStillOpen(ulong positionId)
+{
+   int total = PositionsTotal();
+   for(int i = 0; i < total; ++i)
+   {
+      ulong t = PositionGetTicket(i);
+      if(t == 0) continue;
+      if((ulong)PositionGetInteger(POSITION_IDENTIFIER) == positionId) return true;
+   }
+   return false;
+}
+
+void EnqueuePendingPush(ulong positionId)
+{
+   int n = ArraySize(gPendingTickets);
+   //--- dedup: avoid stacking the same ticket twice
+   for(int i = 0; i < n; ++i)
+      if(gPendingTickets[i] == positionId) return;
+
+   if(n >= kMaxRetryQueue)
+   {
+      Print("[QAISMC] Retry queue full (", kMaxRetryQueue,
+            "), dropping oldest pending ticket=", gPendingTickets[0]);
+      //--- shift left by one
+      for(int j = 0; j < n - 1; ++j) gPendingTickets[j] = gPendingTickets[j+1];
+      n--;
+      ArrayResize(gPendingTickets, n);
+   }
+   ArrayResize(gPendingTickets, n + 1);
+   gPendingTickets[n] = positionId;
+   Print("[QAISMC] Queued ticket=", positionId, " for retry (queue=", n + 1, ")");
+}
+
+void RetryPendingPushes()
+{
+   int n = ArraySize(gPendingTickets);
+   if(n == 0) return;
+
+   //--- Process only ONE ticket per retry cycle so OnTick is never blocked
+   //    by a chain of WebRequest timeouts. With kRetryEverySec=30, each
+   //    queued ticket gets a fresh attempt at least every 30s * queueDepth.
+   //    LIFO so most recent trades clear first when connectivity returns.
+   ulong pid = gPendingTickets[n - 1];
+   bool ok = PushClosedPositionToJournal(pid);
+   if(ok)
+      ArrayResize(gPendingTickets, n - 1);
 }
 
 //+------------------------------------------------------------------+
