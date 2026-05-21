@@ -21,6 +21,8 @@ or the `AI Analysis` page.
 artifacts/
   api-server/        # Express 5 REST API
   trading-journal/   # React + Vite SPA
+experts/
+  QuantAiSmcPro.mq5  # MT5 Expert Advisor (SMC + Fib + Quant AI Score)
 lib/
   db/                # Drizzle schema + migrations
 docs/
@@ -91,6 +93,16 @@ python tradj_bridge.py --api-url https://YOUR_DOMAIN/api \
 
 State is persisted in `~/.tradj_bridge.json`. Server-side, the
 `UNIQUE (user_id, ticket)` constraint blocks duplicates.
+
+## MT5 Expert Advisor (optional)
+
+`experts/QuantAiSmcPro.mq5` implements the **QUANT AI SMC PRO COMPLETE**
+spec — a Smart Money Concepts EA with Fibonacci, candle math, momentum,
+Z-Score, a composite AI score, ATR risk management, an on-chart
+dashboard, and direct journal push. Every closed trade is POSTed to
+`/api/trades` via `WebRequest` using the same Bearer token as the
+Python bridge. See [`experts/README.md`](./experts/README.md) for
+install + WebRequest whitelist instructions.
 
 ## Scripts
 
